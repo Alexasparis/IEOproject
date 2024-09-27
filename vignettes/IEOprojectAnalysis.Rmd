@@ -1,0 +1,1319 @@
+---
+title: "IEO Project: Islet sympathetic innervation and islet neuropathology in patients with type 1 diabetes"
+author:
+- name: "Paula Delgado Manzano"
+  affiliation: "Universitat Pompeu Fabra"
+  email: "paula.delgado01@estudiant.upf.edu"
+- name: "María Chacón Ortiz"
+  affiliation: "Universitat Pompeu Fabra"
+  email: "maria.chacon01@estudiant.upf.edu"
+- name: "Alex Ascunce París"
+  affiliation: "Universitat Pompeu Fabra"
+  email: "alex.ascunce01@estudiant.upf.edu"
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    fig_captions: yes
+bibliography: bibliography.bib
+vignette: >
+  %\VignetteIndexEntry{IEOprojectAnalysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+<!--
+In this first chunk of code, which will not be shown in the resulting
+document (echo=FALSE) sets up global processing options, such as whether
+a comment character should appear before code results (set to the null
+character string in this case), collapse source and output blocks into
+a single code block (collapse=TRUE), align figures to the center
+(fig.align="center") or cache the results to speed up vignette building
+(cache=FALSE thus disabled in this case). A full description of possible
+options can be found at http://yihui.name/knitr/options
+--->
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr) ## kable()
+library(kableExtra) ## kable_styling(), save_kable()
+library(here) ## here()
+library(usethis) ## use_directory()
+
+knitr::opts_chunk$set(
+  collapse=TRUE,
+  comment="",
+  fig.align="center",
+  fig.wide=TRUE,
+  cache=FALSE
+)
+
+## this option avoid use_directory() being verbose
+options(usethis.quiet=TRUE)
+
+## create these paths at build time if they do not exist
+use_directory(file.path("doc"))
+use_directory(file.path("inst", "doc"))
+
+## fetch the package root directory
+path2pkg <- here()
+```
+
+# Introduction
+In autoimmune type 1 diabetes (T1D), the gradual decline of functional β-cell mass initiates the onset of hyperglycemia and necessitates lifelong insulin therapy. However, early-stage dysregulation of glucagon secretion poses a significant challenge to effective disease management. This dysregulation is characterized by inadequate suppression during hyperglycemia and insufficient secretion during hypoglycemia. The specific mechanisms underlying this dysregulated glucagon secretion in T1D remain unclear. However, it is needed to highlight that both the parasympathetic and sympathetic nervous systems play crucial roles in regulating islet hormone secretion to maintain glycemic balance. 
+
+Laser microdissection of intact human islets followed by islet RNA-seq offers an initial step towards understanding sympathetic nervous system-related gene pathways without the inherent stress associated with islet and single-cell isolation procedures. All islets utilized in the study of @campbellthompson21 are from donors without diabetes (ND) and donors with auto-antibodies (AAb) contained β-cells, whereas only a few residual INS-positive β-cells were found in rare islets from T1D donors. Hence, this model was also employed to investigate how the loss of paracrine insulin secretion could influence α-cell gene expression. 
+
+The resulting raw RNA-seq data have been deposited at the Gene Expression Omnibus (GEO), where they are publicly available under accession [GSE181674] (https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE181674).
+
+Here, we show a first exploratory analysis of the corresponding RNA-seq gene expression profiles generated as a table of counts using the DEE2 (https://dee2.io) pipeline by @ziemann19, and further packaged into a [SummarizedExperiment] (https://bioconductor.org/packages/SummarizedExperiment) 
+object with genes mapped to Entrez identifiers. This object also stores the phenotypic information about the profiled samples that has been also made available at GEO.
+
+The question of interest to address in this work is whether gene expression differs in the islets from donors without diabetes (ND), donors with auto-antibodies (AAb), and donors with type 1 diabetes (T1D). 
+
+<!--
+
+```{r, eval=FALSE}
+devtools::build_vignettes()
+```
+
+The rest of the documentation of this package is provided within the files of the R directory using [roxygen2](https://cran.r-project.org/web/packages/roxygen2/vignettes/roxygen2.html), which means that before you build the entire package you have to generate the documentation and `NAMESPACE` file typing in the R shell:
+
+```{r, eval=FALSE}
+devtools::document()
+```
+
+-->
+
+
+# Quality assessment
+
+## Data import and cleaning
+
+We start importing the raw table of counts from the GSE181674.rds file.
+
+<!--
+The option 'message=FALSE' avoid dumping R messages such as "Loading required package: methods"
+into the output of the report.
+-->
+
+```{r, message=FALSE}
+library(SummarizedExperiment)
+
+se <- readRDS(file.path(system.file("extdata", package="IEOproject"), "GSE181674.rds"))
+se
+
+
+```
+
+We have `r nrow(se)` genes by `r ncol(se)` samples. From the first row and column names shown by the object, we can figure out that genes are defined by [Entrez](https://www.ncbi.nlm.nih.gov/gene) [@maglott10] identifiers and samples by Sequence Read Archive Run ([SRR](https://www.ncbi.nlm.nih.gov/books/NBK56913/#search.what_do_the_different_sra_accessi)) identifiers.
+
+First, we explore our SummarizedExperiment object. 
+
+The rowData has information about the features profiled in the assay.
+```{r}
+head(rowData(se))
+
+colnames(rowData(se))
+
+dim(rowData(se))
+```
+We can see information about the genes: gene_id (ensembl id), gene_biotype, description, gene_id_version and symbol. Among these, the gene symbol and description are potentially useful for interpreting results of, for instance, a differential expression analysis. 
+
+The colData contains phenotypic information about the samples. 
+
+```{r}
+head(colData(se), n=3)
+
+colnames(colData(se))
+
+dim(colData(se))
+```
+
+We have a total of `r ncol(colData(se))` phenotypic variables. The second column `geo_accession` contains GEO Sample Accession Number ([GSM](https://www.ncbi.nlm.nih.gov/geo/info/overview.html)) identifiers. GSM identifiers define individual samples, understood in our context as individual sources of RNA. Our samples are not repeated, indicating that among the `r ncol(se)` samples we have not technical replicates: 
+
+```{r}
+ncol(se)
+length(unique(se$geo_accession))
+table(lengths(split(colnames(se), se$geo_accession)))
+```
+
+So, we have `r length(unique(se$geo_accession))` different individual samples out of `r ncol(se)` total samples so we have not technical replicates. 
+
+To proceed further exploring this dataset, we are going to use the [edgeR](https://bioconductor.org/packages/edgeR) package and build a `DGEList` object, incorporating the gene metadata, which includes the gene symbol. We have to be sure that the dimensions of the DGEList object and the SummarizedExperiment object are the same. 
+
+```{r, message=FALSE}
+library(edgeR)
+dge <- DGEList(counts=assays(se)$counts, genes=rowData(se), samples=colData(se))
+dim(dge)
+dim(dge)==dim(se)
+```
+Now, we calculate $\log_2$ CPM units of expression and put them as an
+additional assay element to ease their manipulation.
+
+```{r}
+assays(se)$logCPM <- cpm(dge, log=TRUE, prior.count=0.25)
+assays(se)$logCPM[1:3, 1:6] #Visualization
+```
+
+Let's explore now some of the phenotypic variables. 
+
+Some of them provide information about the samples: title (ID for each sample), geo_accesion, type (SRA), relation, characteristics.
+
+We have also information about the study such as status, submission_data, last_update_date.
+
+Then we can see features related to the organism (Homo sapiens) in `organism_ch1` and `taxid_ch1` and to the tissue (laser microdissected islets) in `tissue` in which the analysis has been conducted. These features remain the same across all samples studied.
+
+```{r}
+table(se$organism_ch1)
+
+table(se$`tissue:ch1`)
+```
+We can also identify some variables associated with technical factors, such as the extraction protocol (extract_protocol_ch1.X, molecule_ch1), RNA-seq experiment (platform_id, instrument_model, library_selection, library_source, library_strategy etc.) 
+and data processing (data_processing.X) that remain the same across samples.
+
+```{r}
+table(se$extract_protocol_ch1)
+
+table(se$data_processing.1)
+```
+
+Finally one feature we are particularly interested in is the disease state.
+We can observe that for each category of the disease state (`disease state:ch1`), 
+there are several biological replicates (`biorep:ch1`):
+
+  - Non-diabetic individuals with islet auto-antibodies: 3 samples
+  - Non-diabetic controls: 8 samples
+  - Diabetic individuals: 7 samples
+
+```{r}
+table(se$`disease state:ch1`)
+```
+To facilitate handling the variables `disease state:ch1` and `biorep:ch1` we are going to recode them
+as follows.
+
+```{r}
+se$disease_state <- as.factor(se$`disease state:ch1`)
+levels(se$disease_state) <- c("ND", "T1D", "AAb")
+
+dge$samples$disease_state <- as.factor(dge$samples$disease.state.ch1)
+levels(dge$samples$disease_state) <- c("ND", "T1D", "AAb")
+
+se$bioreplicate <- se$`biorep:ch1`
+
+#Visualization
+se$disease_state
+dge$samples$disease_state
+```
+
+In Table \@ref(tab:pheno) below, we show this variable jointly with the sample ID and the sample title (identifier used in the paper) and bioreplicate to try to gather as much understanding as possible on the underlying experimental design.
+
+```{r pheno, echo=FALSE, message=FALSE}
+tmpdf <- data.frame("Identifer"=colnames(se),
+                    "Sample Title" = se$title,
+                    "Disease State"=se$`disease state:ch1`,
+                    "Bioreplicate"=se$bioreplicate,
+                    check.names=FALSE)
+ktab<-kable(tmpdf, caption="Phenotypic variables", format = "html", booktabs = TRUE, row.names = FALSE)
+
+kable_styling(ktab, position="center")
+```
+
+When comparing three main groups for differential gene expression, our objective is to assess the differences in gene expression patterns between each pair of groups. This involves pairwise comparisons between the three groups. In Table \@ref(tab:frecuency) we can see how many bioreplicates we have for each condition.
+
+```{r frecuency, echo=FALSE, message=FALSE}
+
+freq_table <- as.data.frame(table(se$disease_state))
+colnames(freq_table) <- c("Disease state", "Frequency")
+kable_styling(kable(freq_table, caption = "Frequency table for disease state", bootstrap_options = "striped", full_width = FALSE, format = "html", booktabs = TRUE, row.names = FALSE))
+
+
+```
+
+## Sequencing depth
+
+Let's examine the sequencing depth in terms of total number of sequence read counts mapped to the genome per sample. Figure \@ref(fig:libsizes) below shows the sequencing depth per sample, also known as library sizes, in increasing order.
+
+<!---
+you can control the height and width in pixels of the figure with
+'out.height' and 'out.width'. Figures are automatically numbered,
+to refer to them in the main text you should use the notation shown
+above as \@ref(fig:xxxx) with xxxx being the label in the code chunk
+that also gives the filename of the figure. This name must be unique
+--->
+
+```{r libsizes, echo=FALSE, out.width="90%", fig.align="center", fig.cap="Library sizes in increasing order."}
+par(mar=c(7, 5, 2, 2))
+ord <- order(dge$sample$lib.size/1e6)
+bp <- barplot(dge$sample$lib.size[ord]/1e6, las = 1, ylab = "Millions of reads",
+              xlab = "", col = se$disease_state[ord], las = 2)
+axis(1, at = bp, labels = se$title[ord], las = 2, cex.axis=0.65)
+legend("topleft", c("Diabetic", "Control", "AAb"), fill = unique(se$disease_state[ord]), inset = 0.01, cex = 0.65)
+mtext("Samples", side = 1, line = 4, cex.lab = 1.2)
+```
+We don't see substantial differences in sequencing depth. The sequencing depth ranges from `r round(min(dge$sample$lib.size/1e6), digits=0)` to `r round(max(dge$sample$lib.size/1e6), digits=0)` million reads.
+Lower sequencing depth samples seem to be enriched in diabetic disease state whereas the other sample groups are not confounded with sequencing depth. Despite this slight difference, there are diabetic samples with higher sequencing depths so the distribution of the different disease states seem to be more or less random indicating no confusion with sequencing depth.
+
+## Distribution of expression levels among samples
+
+Figures \@ref(fig:distRawExp) and \@ref(fig:boxplot) below show the distribution of expression values per sample in logarithmic CPM units of expression.
+
+<!---
+the option echo=FALSE hides the R code. When plotting in general one
+does not want to see the code. Options fig.height and fig.width control
+height and width of the plot in inches while out.height and out.width
+do it in the final output file; see http://yihui.name/knitr/options for
+full details.
+--->
+
+```{r distRawExp, echo=FALSE, fig.height=5, fig.width=5, out.width="600px", fig.cap="Non-parametric density distribution of expression profiles per sample.", message=FALSE}
+library(geneplotter)
+par(mar=c(4, 5, 1, 1))
+lst <- as.list(as.data.frame(assays(se)$logCPM))
+multidensity(lst, xlab=expression(log[2] * "CPM"), legend=NULL, main="", las=1)
+legend("topright", legend = se$title, fill = 1:length(colnames(se)), cex=0.5)
+```
+
+```{r boxplot, echo=FALSE, fig.height=5, fig.width=5, out.width="600px", fig.cap="Boxplot of expression profiles per sample", message=FALSE}
+
+boxplot(assays(se)$logCPM, col="gray", xlab="Samples",
+          ylab=expression(log[2] * "CPM"), cex.axis=0.5, cex.lab=1.0, las=2, names=se$title)
+
+```
+We can see in Figure \@ref(fig:distRawExp) the characteristic two peaks, one around negative values of $\log_2$ CPM representing those genes that are not expressed, and the other around positive values representing those genes that are expressed. There are no substantial differences between the samples in the distribution of expression values. The samples show big overlap.
+
+On the other hand, when depicting the boxplot (Figure \@ref(fig:boxplot)) to assess differential distribution or variability, only one of the samples (T1D_6209) appears to exhibit a slightly different mean value of $\log_2$ CPM, as depicted in Figure \@ref(fig:boxplot). However, this observation is not particularly noteworthy.
+
+## Distribution of expression levels among genes
+
+Let's calculate now the average expression per gene through all the samples. Figure \@ref(fig:exprdist) shows the distribution of those values across genes.
+
+```{r exprdist, echo=FALSE, out.width="600px",fig.align="center",  fig.cap="Distribution of average expression level per gene."}
+avgexp <- rowMeans(assays(se)$logCPM)
+h<-hist(avgexp, xlab=expression(log[2] * "CPM"), main="", las=1, col = "gray")
+abline(v=1, col="red", lwd=2)
+axis(1, at = seq(-8, max(avgexp)), labels = TRUE)
+axis(1, at = h$mids, labels = TRUE)
+```
+As expected, we have two modes, one for genes that are lowly expressed and another for genes which are more expressed in the samples. We will consider that the lowly expressed genes are the ones below 1 $\log_2$ CPM levels (red line in Figure \@ref(fig:exprdist)).
+
+## Filtering of lowly-expressed genes
+
+We filter lowly-expressed genes using the function `filterByExpr()`, grouping by sample-group to define the minimum number of samples in which a gene should be expressed. 
+
+```{r}
+mask <- filterByExpr(dge, group=se$disease_state)
+se.filt <- se[mask, ]
+dim(se.filt)
+dge.filt <- dge[mask, ]
+dim(dge.filt)
+```
+
+```{r filtering1, echo=FALSE, out.width="600px", fig.align="center", fig.cap="Distribution of average expression level per gene with filtered genes highlighted in red 1"}
+par(mar=c(4, 5, 1, 1))
+h<-hist(avgexp, xlab=expression(log[2] * "CPM"), main="", las=1, col = "gray")
+x <- cut(rowMeans(assays(se.filt)$logCPM), breaks=h$breaks)
+lines(h$mids, table(x), type="h", lwd=10, lend=1, col="red")
+legend("topright", c("All genes", "Filtered genes"), fill=c("grey", "red"))
+axis(1, at = seq(-8, max(avgexp)), labels = TRUE)
+axis(1, at = h$mids, labels = TRUE)
+```
+
+We are left with `r nrow(se.filt)` genes in comparison to the `r nrow(se)` genes we had at the beginning. We can visualize this in Figure \@ref(fig:filtering1), since the genes that are left after filtering lowly-expressed genes are highlighted in red.
+
+With this initial filtering method, we fail to eliminate all genes with low expression levels (Figure \@ref(fig:filtering1)). Many genes exhibit negative $\log_2$ CPM levels. However, ultimately, we opted for a filtering cutoff requiring a minimum average of 1 $\log_2$ CPM unit.
+
+```{r}
+mask <- rowMeans(assays(se)$logCPM) > 1
+se.filt <- se[mask, ]
+dge.filt <- dge[mask, ]
+dim(dge.filt)
+par(mar=c(4, 5, 1, 1))
+```
+
+```{r filtering2, echo=FALSE, out.width="600px", fig.align="center",  fig.cap="Distribution of average expression level per gene with filtered genes highlighted in red 2"}
+par(mar=c(4, 5, 1, 1))
+h<-hist(avgexp, xlab=expression(log[2] * "CPM"), main="", las=1, col = "gray")
+x <- cut(rowMeans(assays(se.filt)$logCPM), breaks=h$breaks)
+lines(h$mids, table(x), type="h", lwd=10, lend=1, col="red")
+legend("topright", c("All genes", "Filtered genes"), fill=c("grey", "red"))
+axis(1, at = seq(-8, max(avgexp)), labels = TRUE)
+axis(1, at = h$mids, labels = TRUE)
+```
+
+We are left with `r nrow(se.filt)` genes in comparison to the `r nrow(se)` genes we had at the beginning (Figure \@ref(fig:filtering2)). Note that after filtering with a minimum average of 1, we end up with less genes (12185) in comparison to the first method in which we define a minimum number of samples in which a gene should be expressed (17415). Both dgeList object and se object have been filtered. 
+
+## Normalization between samples
+
+We calculate now the normalization factors on the filtered expression data set. This is an application of the Trimmed Mean of M-values (TMM) method, that takes into consideration different RNA composition of the samples by estimating a scaling factor for each library.
+
+```{r}
+dge.filt <- calcNormFactors(dge.filt)
+```
+
+Now we replace the raw $\log_2$ CPM units in the corresponding assay element of the `SummarizedExperiment` object, by the normalized ones.
+
+```{r}
+assays(se.filt)$logCPM <- cpm(dge.filt, log=TRUE, normalized.lib.sizes=TRUE)
+```
+
+## MA-plots
+
+### MA-plots between conditions
+
+We will examine now the MA-plots of the expression profiles before and after normalization in Figure \@ref(fig:maPlots).
+
+<!---
+Here we make a MA-plot for each sample. The options 'fig.height'
+and 'fig.width' control the relative image size in *inches*. The
+final image size results from 'height'x'dpi' and 'width'x'dpi',
+where 'dpi' is the image resolution in "dots per inch" (by default
+dpi=72). To scale the image to a desired size use 'out.width' and
+'out.height'. More information at http://yihui.name/knitr/options
+--->
+```{r maPlots, echo=FALSE, message=FALSE, fig.height=18, fig.width=10, out.width="100%", dpi=100, echo=FALSE, fig.cap="MA-plots of expression values before and after filtering and normalisation."}
+# Non normalized data
+dge$samples$group <- dge$samples$disease_state
+# Define the comparison groups
+group1 <- "AAb"
+group2 <- "ND"
+group3 <- "T1D"
+
+# Create subsets of data for each pairwise comparison
+subset1 <- dge[, dge$samples$group %in% c(group1, group2)]
+subset2 <- dge[, dge$samples$group %in% c(group1, group3)]
+subset3 <- dge[, dge$samples$group %in% c(group2, group3)]
+
+# In normalized and filtered data
+dge.filt$samples$disease_state <- as.factor(dge.filt$samples$disease.state.ch1)
+levels(dge.filt$samples$disease_state) <- c("AAb", "ND", "T1D")
+dge.filt$samples$group <- dge.filt$samples$disease_state
+
+# Create subsets of data for each pairwise comparison
+subset1.filt <- dge.filt[, dge.filt$samples$group %in% c(group1, group2)]
+subset2.filt <- dge.filt[, dge.filt$samples$group %in% c(group1, group3)]
+subset3.filt <- dge.filt[, dge.filt$samples$group %in% c(group2, group3)]
+
+# Create MA plots for each comparison, suppressing warnings
+par(mfrow=c(3,2))
+
+# AAb and ND
+suppressWarnings({
+  plotSmear(subset1, lowess=TRUE, las=1, cex.lab=1.5, cex.axis=1.2)
+  abline(h=0, col="blue", lwd=2)
+  title(main="AAb and ND")
+
+  plotSmear(subset1.filt, lowess=TRUE, las=1, cex.lab=1.5, cex.axis=1.2)
+  abline(h=0, col="blue", lwd=2)
+  title(main="Normalized/Filtered AAb and ND")
+})
+
+# AAb and T1D
+suppressWarnings({
+  plotSmear(subset2, lowess=TRUE, las=1, cex.lab=1.5, cex.axis=1.2)
+  abline(h=0, col="blue", lwd=2)
+  title(main="AAb and T1D")
+
+  plotSmear(subset2.filt, lowess=TRUE, las=1, cex.lab=1.5, cex.axis=1.2)
+  abline(h=0, col="blue", lwd=2)
+  title(main="Normalized/Filtered AAb and T1D")
+})
+
+# ND and T1D
+suppressWarnings({
+  plotSmear(subset3, lowess=TRUE, las=1, cex.lab=1.5, cex.axis=1.2)
+  abline(h=0, col="blue", lwd=2)
+  title(main="ND and T1D")
+
+  plotSmear(subset3.filt, lowess=TRUE, las=1, cex.lab=1.5, cex.axis=1.2)
+  abline(h=0, col="blue", lwd=2)
+  title(main="Normalized/Filtered ND and T1D")
+})
+
+
+```
+After filtering out genes with low expression levels and performing between-sample normalization, we eliminate sample-specific effects and biases in differential gene expression caused by low expression. As a result, the proportion of reads assigned to a particular gene in a sample is no longer influenced by the overall expression properties of the entire sample. Instead, it depends solely on the expression level of that gene. We discard counts at low values because ratios between small numbers can lead to inflated fold-changes, giving rise to the particular vuvuzela shape that we can see more clearly in the plots obtained before normalization. In general, fold-changes derived from high expression values are more trustworthy than those derived from low-expression values. As shown in the MA-plots of Figure \@ref(fig:maPlots) after normalization, the vuvuzela shape is reduced. 
+
+### MA-plots for each sample:
+
+We will examine now the MA-plots of each sample compared to the average of the rest of the samples in order to detect any possible problematic samples. 
+
+```{r maPlots2, fig.height=18, fig.width=10, dpi=100,out.width="100%", echo=FALSE, fig.cap="MA-plots of filtered and normalized expression values for each sample AAb vs T1D."}
+
+par(mfrow=c(6, 3), mar=c(4, 5, 3, 1))
+for (i in 1:ncol(se.filt)) {
+  
+  A <- rowMeans(assays(se.filt)$logCPM)
+  M <- assays(se.filt)$logCPM[, i] - A
+  sample_title <- se.filt$title[i]  
+  smoothScatter(A, M, main=sample_title, las=1, cex.axis=1.2,
+                cex.lab=1.5, cex.main=2)
+  abline(h=0, col="blue", lwd=2)
+  lo <- lowess(M ~ A)
+  lines(lo$x, lo$y, col="red", lwd=2)
+}
+
+```
+We can see in Figure \@ref(fig:maPlots2) that a number of samples display some expression-level dependent bias.  By visualizing the deviation of individual samples from the average expression across all samples, we can detect specific expression patterns in each individual and make conclusions. 
+
+Most of the samples exhibit a slight expression-level dependent bias at the low-end and/or high-end of the expression spectrum. However, this bias appears to be more pronounced in samples T1D_6362 and T1D_6371, prompting us to monitor other samples with similar biases for any additional unexpected features. Should such features arise, we may consider their removal from the analysis. Initially, we refrain from eliminating these samples due to the experiment's limited sample size and the satisfactory quality of other quality control measures.
+
+In instances where this bias manifests at the low end of the expression spectrum, one potential solution could involve implementing a more stringent filter on minimum expression levels. However, upon testing with higher thresholds, we observe a persistent effect and risk discarding numerous genes that could prove valuable for subsequent comparisons.
+
+Furthermore, we note the absence of discernible patterns between samples of the same category.
+
+## Experimental design and batch identification
+
+Here we try to understand the underlying experimental design. 
+
+First of all, we can do an a multi-dimensional scaling (MDS) plot between the disease state to see if there is a grouping between samples and to detect possible outliers. As we can see in Figure \@ref(fig:mdsPlot), samples do not show a very good grouping by disease state. The MDS plot suggests that AAb gene expression values appear to lie largely intermediate to those of both ND and T1D that are more separated between them. We can detect for one outlier of a T1D donor. We elected not to exclude this donor based on the additional QC parameters which demonstrated that expression values were highly consistent across the range of expression for all samples as mentioned by the authors of the paper. 
+
+```{r mdsPlot, fig.height=5, fig.width=14, dpi=100, out.width="100%", echo=FALSE, fig.cap="Multidimensional scaling plot (MDS) and hierarchical clustering by gene expression of the samples. Labels correspond to DiseaseState_sampleID and colors indicate disease state."}
+par(mfrow = c(1, 2))
+
+colnames(dge.filt)<-dge.filt$samples$title
+plotMDS(dge.filt, col = c("red", "blue", "darkgreen")[dge.filt$samples$disease_state], cex = 0.5)
+legend("topright", c("ND", "T1D", "AAb"), fill = c("red", "blue", "darkgreen"), inset = 0)
+title(main = "MDS colored by disease state")
+
+
+logCPM <- cpm(dge.filt, log=TRUE, prior.count=3)
+d <- as.dist(1-cor(logCPM, method="spearman"))
+sampleClustering <- hclust(d)
+disease_colors <- c("red", "blue", "darkgreen")  
+disease_state_colors <- disease_colors[as.numeric(factor(se.filt$disease_state))]
+sampleDendrogram <- as.dendrogram(sampleClustering, hang = 0.1)
+batch <- disease_state_colors
+names(batch) <- se$title
+outcome <- se$title
+names(outcome) <- se$title
+sampleDendrogram <- dendrapply(sampleDendrogram,
+                               function(x, batch, labels) {
+                                 if (is.leaf(x)) {
+                                   attr(x, "nodePar") <- list(lab.col = as.vector(batch[attr(x, "label")]))
+                                   attr(x, "label") <- as.vector(labels[attr(x, "label")])
+                                 }
+                                 x
+                               }, batch, outcome)
+
+plot(sampleDendrogram, main = "Hierarchical clustering colored by disease state", cex = 0.6)
+legend("right", c("ND", "T1D", "AAb"), fill=c("red", "blue", "darkgreen"), inset=0)
+
+```
+
+In the supplementary data, additional phenotypic information about the samples is available, which is not included in the SummarizedExperiment object. To explore the possibility of other sample groupings or potential confounding variables, we intend to augment the colData dataframe of the object with this phenotypic data. Among these variables, we have identified potential confounding factors such as sex, cause of death, BMI, and age. While race could also be considered a potential confounder, the majority of donors in the study were Caucasian, limiting its utility in this context. Since age and BMI are continuous variables, we have decided to define ranges of values for a clearer analysis. 
+
+```{r}
+
+sex <- c("female","male","male","male","female","female","male","female","female","male","female","female","male","male","female","male","female","male")
+cause_death <- c("Anoxia", "Head Trauma", "Head Trauma", "Anoxia", "Head Trauma", "Head Trauma", "Head Trauma", "Anoxia", "Head Trauma", "Head Trauma", "Head Trauma", "Cerebral Edema", "Anoxia", "Head Trauma", "Anoxia", "Head Trauma", "Cerebral Edema", "Anoxia")
+age <- c(23.0, 17.65, 22.10, 24.2, 14.0, 20.0, 19.0, 9, 14.3, 23.3, 25.07, 5.0, 13.0, 19.0, 14.0, 24.9, 12.5, 23.1)
+bmi <- c(18.60, 20.80, 28.90, 34.00, 25.60, 25.00, 24.80, 31.30, 51.40, 19.60, 
+         23.50, 15.90, 16.60, 17.40, 24.30, 24.50, 28.40, 28.50)
+
+colnames(dge.filt)<-dge.filt$samples$title
+
+colData(se.filt)$sex <- as.factor(sex)
+colData(se.filt)$cause_death <- as.factor(cause_death)
+
+colData(se.filt)$age <- as.numeric(age)
+colData(se.filt)$bmi <- as.numeric(bmi)
+
+dge.filt$samples$sex <- as.factor(sex)
+dge.filt$samples$cause_death <- as.factor(cause_death)
+dge.filt$samples$age <- as.numeric(age)
+dge.filt$samples$bmi <- as.numeric(bmi)
+```
+
+```{r mdspheno, fig.height=10, fig.width=15, dpi=100, out.width="100%", echo=FALSE, fig.cap="Multidimensional scaling plot (MDS) of the samples. Labels correspond to DiseaseState_sampleID and colors indicate the different potential confounding variables"}
+par(mfrow=c(2, 2))
+#By sex
+plotMDS(dge.filt, col=c("red", "blue")[as.factor(dge.filt$samples$sex)])
+legend("topright", c("female", "male"), fill=c("red", "blue"), inset = 0)
+title(main = "By sex")
+
+#By cause of death
+plotMDS(dge.filt, col=c("red", "blue", "darkgreen")[as.factor(dge.filt$samples$cause_death)])
+legend("topright", c("Anoxia", "Cerebral Edema", "Head Trauma"), fill=c("red", "blue", "darkgreen"), inset = 0)
+title(main = "By cause of death")
+
+#By age
+unique_ages <- unique(dge.filt$samples$age)
+sorted_unique_ages <- sort(unique_ages)
+color_range <- colorRampPalette(c("lightblue", "darkblue"))
+age_colors <- color_range(length(sorted_unique_ages))
+age_color_map <- age_colors[match(dge.filt$samples$age, sorted_unique_ages)]
+
+# Plot MDS with Age color gradient
+plotMDS(dge.filt, col = age_color_map)
+title(main = "By Age")
+# Legend for BMI color gradient
+legend("topright", legend = sorted_unique_ages, fill = age_colors, cex = 0.6)
+
+#By BMI
+unique_bmi <- unique(dge.filt$samples$bmi)
+sorted_unique_bmi <- sort(unique_bmi)
+bmi_colors <- color_range(length(sorted_unique_bmi))
+bmi_color_map <- bmi_colors[match(dge.filt$samples$bmi, sorted_unique_bmi)]
+# Plot MDS with BMI color gradient
+plotMDS(dge.filt, col = bmi_color_map)
+title(main = "By BMI")
+# Legend for BMI color gradient
+legend("topright", legend = sorted_unique_bmi, fill = bmi_colors, cex = 0.6)
+
+```
+
+From Multidimensional Scaling Plots (MDS) of figure \@ref(fig:mdsPlot) we can conclude that with respect to sex, death cause, BMI and age we cannot find any substantial differences or grouping behavior between samples. This leads us to the conclusion that there is no confounding due to these features. 
+
+```{r clustering, fig.height=10, fig.width=15, dpi=100, out.width="100%", echo=FALSE, fig.cap="Hierarchical clustering of the samples. Labels correspond to DiseaseState_sampleID and colors indicate the different potential confounding variables."}
+par(mfrow=c(2, 2))
+
+#Sex
+sex_colors <- c("red", "blue")  
+sex_state_colors <- sex_colors[as.numeric(factor(dge.filt$samples$sex))]
+sampleDendrogram_sex <- hclust(d, method = "complete")  
+sampleDendrogram_sex <- as.dendrogram(sampleDendrogram_sex)
+batch <- sex_state_colors
+names(batch) <- se$title
+sampleDendrogram_sex <- dendrapply(sampleDendrogram_sex,
+                                   function(x, batch, labels) {
+                                     if (is.leaf(x)) {
+                                       attr(x, "nodePar") <- list(lab.col = as.vector(batch[attr(x, "label")]))
+                                       attr(x, "label") <- as.vector(labels[attr(x, "label")])
+                                     }
+                                     x
+                                   }, batch, outcome)
+plot(sampleDendrogram_sex, main = "Colored by sex", cex = 0.6)
+legend("topright", c("female", "male"), fill = c("red", "blue"), cex=0.6)
+
+#Death_cause
+death_cause_colors <- c("red", "blue", "darkgreen")  
+death_cause_state_colors <- death_cause_colors[as.numeric(factor(dge.filt$samples$cause_death))]
+sampleDendrogram_death_cause <- hclust(d, method = "complete")  
+sampleDendrogram_death_cause <- as.dendrogram(sampleDendrogram_death_cause)
+batch <- death_cause_state_colors
+names(batch) <- se$title
+sampleDendrogram_death_cause <- dendrapply(sampleDendrogram_death_cause,
+                                           function(x, batch, labels) {
+                                             if (is.leaf(x)) {
+                                               attr(x, "nodePar") <- list(lab.col = as.vector(batch[attr(x, "label")]))
+                                               attr(x, "label") <- as.vector(labels[attr(x, "label")])
+                                             }
+                                             x
+                                           }, batch, outcome)
+plot(sampleDendrogram_death_cause, main = "Colored by cause of death", cex = 0.6)
+legend("topright", c("Anoxia", "Cerebral Edema", "Head Trauma"), fill = c("red", "blue", "darkgreen"), cex=0.6)
+
+#Age
+# Age
+logCPM <- cpm(dge.filt, log=TRUE, prior.count=3)
+d <- as.dist(1 - cor(logCPM, method = "spearman"))
+sampleClustering <- hclust(d)
+
+sampleDendrogram <- as.dendrogram(sampleClustering, hang = 0.1)
+outcome <- se$title
+names(outcome) <- se$title
+batch <- age_color_map
+names(batch)<- se$title
+sampleDendrogram <- dendrapply(sampleDendrogram,
+                               function(x, batch, labels) {
+                                 if (is.leaf(x)) {
+                                   attr(x, "nodePar") <- list(lab.col = as.vector(batch[attr(x, "label")]))
+                                   attr(x, "label") <- as.vector(labels[attr(x, "label")])
+                                 }
+                                 x
+                               }, batch, outcome)
+plot(sampleDendrogram, main = "Colored by age", cex = 0.7)
+legend("topright", legend = sorted_unique_ages, fill = age_colors, cex = 0.7)
+
+#BMI
+logCPM <- cpm(dge.filt, log=TRUE, prior.count=3)
+d <- as.dist(1-cor(logCPM, method="spearman"))
+sampleClustering <- hclust(d)
+
+batch <- bmi_color_map
+names(batch) <- se$title
+sampleDendrogram <- as.dendrogram(sampleClustering, hang=0.1)
+outcome <- se$title
+names(outcome) <- se$title
+sampleDendrogram <- dendrapply(sampleDendrogram,
+                               function(x, batch, labels) {
+                                 if (is.leaf(x)) {
+                                   attr(x, "nodePar") <- list(lab.col=as.vector(batch[attr(x, "label")]))
+                                   attr(x, "label") <- as.vector(labels[attr(x, "label")])
+                                 }
+                                 x
+                               }, batch, outcome)
+plot(sampleDendrogram, main = "Colored by BMI", cex = 0.7)
+legend("topright", legend = sorted_unique_bmi, fill = bmi_colors, cex=0.6)
+
+
+
+```
+According to the previous results, in Figure \@ref(fig:clustering) depicting the hierarchical clusters of the samples colored by the different variables studied, we observe that there is no clustering based on sex, death cause or BMI. However, we have noticed some kind of grouping based on age as the younger samples are on the left and the older on the right.
+
+### MDS AND HC CONCLUSION
+
+We examined how samples group together by multidimensional scaling and hierarchical clustering, annotating disease state and sex, BMI, age and cause of death. We calculate again log CPM values with a high prior count(3) to moderate extreme fold-changes produced by low counts. 
+
+In the MDS plots shown in Figure \@ref(fig:mdspheno), a conspicuous clustering pattern is observed, characterized by a predominant cluster encompassing the majority of samples, followed by 3 outliers positioned distinctly apart from the main cluster. Particularly noteworthy is the sample labeled T1D_6109, corresponding to the youngest individual in the dataset, aged 5 years, as indicated in the MDS plot by age. Notably, there is no apparent clustering pattern based on any examined variable. The presence of this distinct outlier, specifically the sample from the 5-year-old child, suggests a significant deviation from the overall expression profiles observed in the dataset, such deviation warrant further investigation to elucidate underlying factors contributing to the observed separation, potentially shedding light on age-related expression patterns or technical artifacts influencing the analysis.
+
+In the hierarchical clustering analysis annotated by sex (see Figure \@ref(fig:clustering)), no distinct clustering pattern emerges based on this variable. This observation suggests that the samples do not segregate into discernible groups based on gender. On the other hand, in the hierarchical clustering analysis annotated by BMI (see Figure \@ref(fig:clustering)), while there is clustering observed, it is not prominently delineated by this variable alone. Notably, the samples primarily cluster based on BMI, with a notable concentration of underweight samples within a distinct group. However, other BMI categories do not exhibit clear, separate clusters, suggesting that additional factors may contribute to the overall clustering pattern observed. 
+
+In the hierarchical clustering analysis annotated by age (see Figure \@ref(fig:clustering)), a discernible grouping of samples is evident. This pronounced clustering pattern suggests that age could indeed be a confounding variable in the dataset analysis. The presence of clearly delineated age-based clusters implies that age-related biological or developmental differences may significantly influence the expression profiles observed in the samples. Consequently, failing to account for age as a confounding variables in the analysis could potentially introduce bias or confound the interpretation of results. Therefore, while age should be carefully considered and appropriately addressed as a potential confounding variables, additional validation and exploration are warranted to confirm its true impact on the clustering patterns observed.
+
+## Assesment of expression changes
+
+We perform a simple assessment of the extent of expression changes and their associated p-values using the F-test implemented in the R/Bioconductor package [sva](http://bioconductor.org/packages/sva). We compare T1D with AAb, T1D with ND and ND with AAb samples. We first subset the data as follows:
+
+```{r}
+# Subset for T1D vs AAb
+#T1D vs AAb
+se.filt_T1D_AAb <- se.filt[, se.filt$disease_state %in% c("T1D", "AAb")]
+se.filt_T1D_AAb$disease_state <- droplevels(se.filt_T1D_AAb$disease_state)
+
+#AAb vs ND
+se.filt_AAb_ND <- se.filt[, se.filt$disease_state %in% c("ND", "AAb")]
+se.filt_AAb_ND$disease_state <- droplevels(se.filt_AAb_ND$disease_state)
+
+#ND vs T1D
+se.filt_ND_T1D <- se.filt[, se.filt$disease_state %in% c("T1D", "ND")]
+se.filt_ND_T1D$disease_state <- droplevels(se.filt_ND_T1D$disease_state)
+```
+In the second step above, we dropped the unused levels from the disease_state
+factor variable. This is important to avoid using factor levels that do not
+exist in this subset of the data. We build now the corresponding full and null
+model matrices.
+
+### Without adjusting for confounding variables:
+```{r}
+# Subset for T1D vs AAb
+mod_T1D_AAb <- model.matrix(~ disease_state, colData(se.filt_T1D_AAb))
+mod0_T1D_AAb <- model.matrix(~ 1, colData(se.filt_T1D_AAb))
+
+# Subset for AAb vs ND
+mod_AAb_ND <- model.matrix(~ disease_state, colData(se.filt_AAb_ND))
+mod0_AAb_ND <- model.matrix(~ 1, colData(se.filt_AAb_ND))
+
+# Subset for ND vs T1D
+mod_ND_T1D <- model.matrix(~ disease_state, colData(se.filt_ND_T1D))
+mod0_ND_T1D <- model.matrix(~ 1, colData(se.filt_ND_T1D))
+
+```
+
+Finally, we conduct the F-test implemented in the package `sva` and examine the amount of differential expression between pairwise disease_states.
+
+
+```{r, message=FALSE}
+library(sva)
+
+# T1D vs AAb
+pv_T1D_AAb <- f.pvalue(assays(se.filt_T1D_AAb)$logCPM, mod_T1D_AAb, mod0_T1D_AAb)
+sum(p.adjust(pv_T1D_AAb, method="fdr") < 0.05)
+sum(p.adjust(pv_T1D_AAb, method="fdr") < 0.1)
+
+# AAb vs ND
+pv_AAb_ND <- f.pvalue(assays(se.filt_AAb_ND)$logCPM, mod_AAb_ND, mod0_AAb_ND)
+sum(p.adjust(pv_AAb_ND, method="fdr") < 0.05)
+sum(p.adjust(pv_AAb_ND, method="fdr") < 0.1)
+
+# ND vs T1D
+pv_ND_T1D <- f.pvalue(assays(se.filt_ND_T1D)$logCPM, mod_ND_T1D, mod0_ND_T1D)
+sum(p.adjust(pv_ND_T1D, method="fdr") < 0.05)
+sum(p.adjust(pv_ND_T1D, method="fdr") < 0.1)
+
+```
+
+No DE genes were found between T1D and AAb or ND and AAB. For the comparison between ND and T1D, we identified `r sum(p.adjust(pv_ND_T1D, method="fdr") < 0.05)` DE genes at FDR < 5%, but `r sum(p.adjust(pv_ND_T1D, method="fdr") < 0.1)` DE genes at FDR < 10%. The distribution of the resulting p-values is shown in Figure \@ref(fig:pdist).
+
+```{r pdist, echo=FALSE, out.width="600px", fig.cap="Distribution of raw p-values for an F-test on every gene between T1D vs AAb, AAb vs ND and ND vs T1D samples."}
+par(mfrow=c(1,3))
+
+hist(pv_T1D_AAb, main="T1D vs AAb", xlab="p-value", ylab="Frequency", las=1)
+hist(pv_AAb_ND, main="AAb vs ND", xlab="p-value", ylab="Frequency", las=1)
+hist(pv_ND_T1D, main="ND vs T1D", xlab="p-value", ylab="Frequency", las=1)
+
+```
+We can see in Figure \@ref(fig:pdist) the distribution of p-values of the comparisons. Under the null hypothesis should be uniform. Assuming that most genes are not differentially expressed (DE), the histogram should have looked uniform with a peak at low p-values for the truly DE genes. Departures from this shape indicate within sample group heterogeneity that may need to be adjusted.
+
+### Adjusting for known and unknown confounding variables:
+
+Now we adjust for age as known confounding effect and we adjust for unknown sources of variation with SVA. Then we conduct again the F-test implemented in the package `sva` and examine the amount of differential expression between pairwise disease_states. 
+
+```{r}
+# Subset for T1D vs AAb
+mod_T1D_AAb <- model.matrix(~ disease_state + age, colData(se.filt_T1D_AAb))
+mod0_T1D_AAb <- model.matrix(~ age, colData(se.filt_T1D_AAb))
+
+# Subset for AAb vs ND
+mod_AAb_ND <- model.matrix(~ disease_state + age, colData(se.filt_AAb_ND))
+mod0_AAb_ND <- model.matrix(~ age, colData(se.filt_AAb_ND))
+
+# Subset for ND vs T1D
+mod_ND_T1D <- model.matrix(~ disease_state + age, colData(se.filt_ND_T1D))
+mod0_ND_T1D <- model.matrix(~ age, colData(se.filt_ND_T1D))
+```
+
+```{r}
+library(sva)
+sv1 <- sva(assays(se.filt_T1D_AAb)$logCPM, mod_T1D_AAb, mod0_T1D_AAb)
+names(sv1)
+
+sv2 <- sva(assays(se.filt_AAb_ND)$logCPM, mod_AAb_ND, mod0_AAb_ND)
+names(sv2)
+
+sv3 <- sva(assays(se.filt_ND_T1D)$logCPM, mod_ND_T1D, mod0_ND_T1D)
+names(sv3)
+
+#For SV1
+modSV1 <- cbind(mod_T1D_AAb, sv1$sv)
+mod0SV1 <- cbind(mod0_T1D_AAb, sv1$sv)
+pvalsSV1 <- f.pvalue(assays(se.filt_T1D_AAb)$logCPM, modSV1, mod0SV1)
+sum(p.adjust(pvalsSV1, method="fdr") < 0.05)
+
+#For SV2
+modSV2 <- cbind(mod_AAb_ND, sv2$sv)
+mod0SV2 <- cbind(mod0_AAb_ND, sv2$sv)
+pvalsSV2 <- f.pvalue(assays(se.filt_AAb_ND)$logCPM, modSV2, mod0SV2)
+sum(p.adjust(pvalsSV2, method="BH") < 0.05)
+
+#For SV3
+modSV3 <- cbind(mod_ND_T1D, sv3$sv)
+mod0SV3 <- cbind(mod0_ND_T1D, sv3$sv)
+pvalsSV3 <- f.pvalue(assays(se.filt_ND_T1D)$logCPM, modSV3, mod0SV3)
+sum(p.adjust(pvalsSV3, method="BH") < 0.05)
+```
+
+Adjusting for surrogate variables (SVs) in gene expression analysis did not reveal any differentially expressed genes between pair of conditions except for `r sum(p.adjust(pvalsSV3, method="BH") < 0.05)` DE genes between T1D and ND samples, higher than the `r sum(p.adjust(pv_ND_T1D, method="fdr") < 0.05)` identified previously at FDR < 5%. 
+
+```{r pdist2, echo=FALSE, out.width="600px", fig.cap="Distribution of raw p-values for an F-test on every gene between T1D vs AAb, AAb vs ND and ND vs T1D samples."}
+par(mfrow=c(1,3))
+
+hist(pvalsSV1, main="T1D vs AAb (SV adjusted)", xlab="p-value", ylab="Frequency", las=1)
+hist(pvalsSV2, main="AAb vs ND (SV adjusted)", xlab="p-value", ylab="Frequency", las=1)
+hist(pvalsSV3, main="ND vs T1D (SV adjusted)", xlab="p-value", ylab="Frequency", las=1)
+
+```
+We can see that the histograms of the p-value distribution are more uniform now (Figure \@ref(fig:pdist2)).
+
+### Tables of DE genes:
+Now we build a table with the differentially expressed (DE) genes having an FDR < 10%, only for the comparison T1D and ND that is the only one that has any DE gene adjusting for surrogate variables (SV). 
+
+```{r, message=FALSE, echo=FALSE}
+# Contar cuántos elementos son TRUE en mask_T1D_AAb
+mask_ND_T1D <- p.adjust(pv_ND_T1D, method="fdr") < 0.1
+DEgenesEGs_ND_T1D <- names(pv_ND_T1D)[mask_ND_T1D]
+DEgenesSyms_ND_T1D <- mcols(se.filt_ND_T1D)[DEgenesEGs_ND_T1D, "symbol"]
+DEgenesPvalue_ND_T1D <- pv_ND_T1D[mask_ND_T1D]
+DEgenesDesc_ND_T1D <- mcols(se.filt_ND_T1D)[DEgenesEGs_ND_T1D, "description"]
+DEgenesDesc_ND_T1D <- sub(" \\[.+\\]", "", DEgenesDesc_ND_T1D)
+DEgenesTab_ND_T1D <- data.frame(EntrezID=DEgenesEGs_ND_T1D,
+                                Symbol=DEgenesSyms_ND_T1D,
+                                Description=DEgenesDesc_ND_T1D,
+                                "P value"=DEgenesPvalue_ND_T1D,
+                                stringsAsFactors=FALSE, check.names=FALSE)
+DEgenesTab_ND_T1D <- DEgenesTab_ND_T1D[order(DEgenesTab_ND_T1D[["P value"]]), ] ## order by p-value
+rownames(DEgenesTab_ND_T1D) <- 1:nrow(DEgenesTab_ND_T1D)
+```
+
+<!--
+  The following code chunk is hidden because its lines are not that relevant
+to the analysis of the data. Their purpose is to dump the table of DE genes
+into an HTML table and a CSV file to facilitate the examination of long lists
+of DE genes while avoiding to produce a lengthy vignette by showing only the
+top-10 DE genes.
+--->
+
+```{r, echo=FALSE}
+## Generate full table in a CSV file and store it in the 'doc' directory
+## twice, once in 'doc' to enable quick lookup during vignette editing
+## and building with 'devtools::build_vignettes()' and a second time in
+## 'inst/doc' to make these files available at install.
+fnameCSV_ND_T1D <- "DEgenesND_T1D.csv"
+fpathCSV_ND_T1D <- file.path(path2pkg, "doc", fnameCSV_ND_T1D)
+write.csv(DEgenesTab_ND_T1D, fpathCSV_ND_T1D, row.names=FALSE)
+fpathCSV_ND_T1D <- file.path(path2pkg, "inst", "doc", fnameCSV_ND_T1D)
+write.csv(DEgenesTab_ND_T1D, fpathCSV_ND_T1D, row.names=FALSE)
+
+## Generate full table in HTML and store it into the 'doc' directory
+## twice, just as we did with the CSV file. Note that because the
+## table caption is not translated from Markdown, but directly copied
+## into HTML, we need to avoid using the '<' symbol, as in FDR < 10%,
+## and put its HTML code instead (&lt;)
+
+ktab_ND_T1D <- kable(DEgenesTab_ND_T1D, "html", escape=FALSE, row.names=TRUE,
+                      caption=sprintf("Differentially expressed genes between ND and T1D. DE genes with FDR &lt; 10%% (CSV <a href=\"%s\" download>file</a>).",
+                                      fnameCSV_ND_T1D))
+ktab_ND_T1D <- kable_styling(ktab_ND_T1D,
+                              bootstrap_options=c("stripped", "hover", "responsive"),
+                              fixed_thead=TRUE)
+fnameHTML_ND_T1D <- "DEgenesND_T1D.html"
+fpathHTML_ND_T1D <- file.path(path2pkg, "doc", fnameHTML_ND_T1D)
+save_kable(ktab_ND_T1D, file=fpathHTML_ND_T1D, self_contained=TRUE)
+fpathHTML_ND_T1D <- file.path(path2pkg, "inst", "doc", fnameHTML_ND_T1D)
+save_kable(ktab_ND_T1D, file=fpathHTML_ND_T1D, self_contained=TRUE)
+```
+
+<!--
+  The following code chunk is also hidden because its purpose is to produce
+a short HTML table of the top-10 DE genes. The reason show here only the
+top-10 genes is to producing a long vignette. The full HTML table and the
+corresponding CSV file are linked through the caption of this short HTML
+table.
+
+note that because the table caption is not translated from Markdown, but
+directly copied into HTML, we need to avoid using the '<' symbol, as in
+FDR < 10%, and put its HTML code instead (&lt;)
+--->
+
+Finally for the comparison between ND and T1D. We obtain `r sum(p.adjust(pv_ND_T1D, method="fdr") < 0.1)` DE genes at FDR < 10%. Below, we present the top-10 genes with the lowest p-values in Table \@ref(tab:tableDE).
+
+```{r tableDE, message=FALSE, echo=FALSE}
+ktab <- kable(DEgenesTab_ND_T1D[1:10, ], format="html", escape=FALSE, row.names=TRUE,
+              caption=sprintf("Top-10 differentially expressed genes with lowest p-value between ND and T1D with FDR &lt; 10%%. To see the full list of DE genes, follow this <a href=\"%s\" target=\"_blank\">link</a> or download this CSV <a href=\"%s\" download>file</a>.",
+                              fnameHTML_ND_T1D, fnameCSV_ND_T1D), booktabs=TRUE, ref.label="DEgenesND_T1D")
+kable_styling(ktab, position="center")
+```
+
+# Differential expression
+
+In order to analyze the differential expression (DE) between the three conditions, we will use the Bioconductor package limma, which implements procedures to carry out DE analyses on RNA-seq data implementing the mean-variance relationship into linear regression models.
+We have analyzed DE without taking into account covariates, taking into account age as a confounding variable and also taking into account age and unknown covariates. Also we have used both the limma-trend and limma-voom pipelines. The results were more or less similar but in our case, the dataset consist of a relatively small number of replicates (8 ND, 7 T1D, and 3 AAb) and minimal variation in library sizes, so we will use limma-trend pipeline.  
+
+```{r}
+# T1D vs AAb
+se.filt_T1D_AAb$disease_state <- relevel(se.filt_T1D_AAb$disease_state, ref="T1D")
+mod1 <- model.matrix(~ disease_state + age, data=colData(se.filt_T1D_AAb))
+mod0.1 <- model.matrix(~age, data=colData(se.filt_T1D_AAb))
+sv1 <- sva(assays(se.filt_T1D_AAb)$logCPM, mod=mod1, mod0=mod0.1)
+mod1 <- cbind(mod1, sv1$sv)
+colnames(mod1) <- c(colnames(mod1)[1:3], paste0("SV", 1:sv1$n))
+head(mod1, 3)
+head(rowData(se.filt_AAb_ND))
+#Fit the model
+fit1 <- lmFit(assays(se.filt_T1D_AAb)$logCPM, mod1)
+#Calculate moderate t statistics
+fit1 <- eBayes(fit1, trend=TRUE)
+#Add gene metadata
+genesmd <- data.frame(chr=as.character(seqnames(rowRanges(se.filt_T1D_AAb))),
+                       symbol=rowData(se.filt_T1D_AAb)[, 5],
+                       stringsAsFactors=FALSE)
+
+fit1$genes <- genesmd
+tt1 <- topTable(fit1, coef=2, n=Inf)
+DEgenes1 <- rownames(tt1)[tt1$adj.P.Val < 0.1]
+length(DEgenes1)
+```
+
+```{r}
+# AAb vs ND
+se.filt_AAb_ND$disease_state <- relevel(se.filt_AAb_ND$disease_state, ref = "AAb")
+mod2 <- model.matrix(~ disease_state + age, data = colData(se.filt_AAb_ND))
+mod0.2 <- model.matrix(~ age, data = colData(se.filt_AAb_ND))
+sv2 <- sva(assays(se.filt_AAb_ND)$logCPM, mod = mod2, mod0 = mod0.2)
+mod2 <- cbind(mod2, sv2$sv)
+colnames(mod2) <- c(colnames(mod2)[1:3], paste0("SV", 1:sv2$n))
+head(mod2, 3)
+
+# Fit the model
+fit2 <- lmFit(assays(se.filt_AAb_ND)$logCPM, mod2)
+# Calculate moderated t statistics
+fit2 <- eBayes(fit2, trend = TRUE)
+# Add gene metadata
+genesmd2 <- data.frame(chr = as.character(seqnames(rowRanges(se.filt_AAb_ND))),
+                       symbol = rowData(se.filt_AAb_ND)[, 5],
+                       stringsAsFactors = FALSE)
+fit2$genes <- genesmd2
+tt2 <- topTable(fit2, coef = 2, n = Inf)
+DEgenes2 <- rownames(tt2)[tt2$adj.P.Val < 0.1]
+length(DEgenes2)
+```
+
+```{r}
+# ND vs T1D
+se.filt_ND_T1D$disease_state <- relevel(se.filt_ND_T1D$disease_state, ref = "ND")
+mod3 <- model.matrix(~ disease_state + age, data = colData(se.filt_ND_T1D))
+mod0.3 <- model.matrix(~ age, data = colData(se.filt_ND_T1D))
+sv3 <- sva(assays(se.filt_ND_T1D)$logCPM, mod = mod3, mod0 = mod0.3)
+mod3 <- cbind(mod3, sv3$sv)
+colnames(mod3) <- c(colnames(mod3)[1:3], paste0("SV", 1:sv3$n))
+head(mod3, 3)
+
+# Fit the model
+fit3 <- lmFit(assays(se.filt_ND_T1D)$logCPM, mod3)
+# Calculate moderated t statistics
+fit3 <- eBayes(fit3, trend = TRUE)
+# Add gene metadata
+genesmd3 <- data.frame(chr = as.character(seqnames(rowRanges(se.filt_ND_T1D))),
+                       symbol = rowData(se.filt_ND_T1D)[, 5],
+                       stringsAsFactors = FALSE)
+fit3$genes <- genesmd3
+tt3 <- topTable(fit3, coef = 2, n = Inf)
+DEgenes3 <- rownames(tt3)[tt3$adj.P.Val < 0.1]
+length(DEgenes3)
+```
+There are no DE genes between T1D and AAb samples whereas We identified `r length(DEgenes2)` DE genes at FDR < 10% between AAb and ND patients and `r length (DEgenes3)` DE genes at FDR < 10% between ND and T1D samples. The distribution of the resulting p-values is shown in Figure \@ref(fig:pdist3).
+
+```{r pdist3, echo=FALSE, out.width="600px", fig.cap="Distribution of raw p-values and qq plots of the moderated t statistics for the test on every gene between T1D vs AAb, AAb vs ND and ND vs T1D samples with limma-trend adjusting for known and unknown variables."}
+
+# Set up the layout for six plots in a 2x3 grid
+par(mfrow = c(3, 2), mar = c(5, 5, 2, 2))
+
+# Histogram of raw p-values for T1D vs AAb
+hist(tt1$P.Value, xlab = "Raw P-values", main = "T1D vs AAb", las = 1, col = "lightblue", border = "black")
+
+# QQ plot for T1D vs AAb
+qqt(fit1$t[, 2], df = fit1$df.prior + fit1$df.residual, main = "QQ Plot T1D vs AAb", pch = ".", cex = 3)
+abline(0, 1, lwd = 2)
+
+# Histogram of raw p-values for AAb vs ND
+hist(tt2$P.Value, xlab = "Raw P-values", main = "AAb vs ND", las = 1, col = "lightgreen", border = "black")
+
+# QQ plot for AAb vs ND
+qqt(fit2$t[, 2], df = fit2$df.prior + fit2$df.residual, main = "QQ Plot AAb vs ND", pch = ".", cex = 3)
+abline(0, 1, lwd = 2)
+
+# Histogram of raw p-values for ND vs T1D
+hist(tt3$P.Value, xlab = "Raw P-values", main = "ND vs T1D", las = 1, col = "lightcoral", border = "black")
+
+# QQ plot for ND vs T1D
+qqt(fit3$t[, 2], df = fit3$df.prior + fit3$df.residual, main = "QQ Plot ND vs T1D", pch = ".", cex = 3)
+abline(0, 1, lwd = 2)
+
+
+```
+We can observe in Figure \@ref(fig:pdist3) that the distribution of the raw p-values is the expected, since we see the maximum peak at the left end of the distribution, and the rest is more or less uniform in ND vs T1D. On the other side we don't see that peak in T1D vs AAb and AAb vs ND where distributions are more or less uniform. This is consistent with the fact that the comparison T1D vs AAb has no DE genes and AAb vs ND only two at FDR < 10%.
+
+In the case of the QQplot, we can see that we have not any/many DE genes between AAb and T1D or AAb vs ND as the points in the QQ plot lie close to the reference line (the theoretical line), it indicates that the observed t-statistics follow the expected distribution under the null hypothesis. This suggests that there are no substantial deviations, and the null hypothesis (no differential expression) is mostly true for these comparisons. 
+ 
+In the case of ND vs T1D, in this comparison, the QQ plot shows significant deviations from the theoretical line at both extremes (negative and positive values). This deviation indicates that the observed t-statistics are more extreme than what would be expected under the null hypothesis. A downward deviation at the lower end suggests an excess of negative t-statistics, indicating more genes are significantly downregulated in ND compared to T1D whereas an upward deviation at the upper end suggests an excess of positive t-statistics, indicating more genes are significantly upregulated in ND compared to T1D.
+
+Moreover, we can use volcano plots to examine the extent of DE for a contrast of interest.
+
+```{r volcano,message=FALSE, echo=FALSE, message=FALSE, fig.cap="Volcano Plots showing DE genes, with upregulated and downregulated genes in the right and left respectively.", fig.width = 14, fig.height = 7}
+library(gridExtra)
+library(ggplot2)
+library(limma)
+
+# Define thresholds
+logFC_threshold <- 1
+adj.P.Val_threshold <- 0.1
+
+# Function to create volcano plot
+create_volcano_plot <- function(data, title) {
+  data$threshold <- as.factor(
+    ifelse(data$adj.P.Val < adj.P.Val_threshold & abs(data$logFC) >= logFC_threshold,
+           ifelse(data$logFC > logFC_threshold, "Upregulated", "Downregulated"),
+           "Not Significant")
+  )
+  data <- data[order(data$adj.P.Val), ]
+  top10_genes <- head(data, 10)
+
+  volcano_plot <- ggplot(data, aes(x = logFC, y = -log10(adj.P.Val), color = threshold)) +
+    geom_point(alpha = 0.7, size = 1.5) +
+    theme_minimal() +
+    scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue", "Not Significant" = "grey")) +
+    labs(title = title,
+         x = "Log Fold Change",
+         y = "-Log10 Adjusted P-Value") +
+    geom_vline(xintercept = c(-logFC_threshold, logFC_threshold), col = "black", linetype = "dashed") +
+    geom_hline(yintercept = -log10(adj.P.Val_threshold), col = "black", linetype = "dashed") +
+    geom_text(data = top10_genes, aes(label = symbol), vjust = 1, size = 4)
+
+  return(volcano_plot)
+}
+
+plot1 <- create_volcano_plot(tt1, "AAb vs T1D volcano plot")
+plot2 <- create_volcano_plot(tt2, "AAb vs ND volcano plot")
+plot3 <- create_volcano_plot(tt3, "ND vs T1D volcano plot")
+
+# Arrange the plots in one row
+grid.arrange(plot1, plot2, plot3, nrow = 2)
+```
+We can se that no DE genes were found between AAb and T1D in Figure \@ref(fig:volcano). In the case of ND vs AAb, there is only two DE genes, one downregulated and the other upregulated. On the other hand, more than 2000 genes have a differential expression in the ND vs T1D condition. In Figure \@ref(fig:pdist3) we can see the top 10 genes names. 
+
+# Functional analysis
+
+## Gene Ontology Analysis
+
+Our next goal is to contextualize the differentially expressed genes identified in the previous section to determine which biological processes are involved. A common method for functional enrichment analysis involves conducting a Gene Ontology (GO) analysis, which typically entails applying the one-tailed Fisher's exact test to each gene set in the GO database. It will be done only for the conditions T1D vs ND as the others present a few or no DE genes.
+
+```{r GO, message=FALSE}
+library(org.Hs.eg.db)
+library(GOstats)
+
+# Define geneUniverse as all genes
+geneUniverse <- rownames(se)
+
+# ND vs T1D (tt3)
+
+# Build parameters object
+params3 <- new("GOHyperGParams", geneIds=DEgenes3,    
+                 universeGeneIds=geneUniverse,
+                 annotation="org.Hs.eg.db", ontology="BP",
+                 pvalueCutoff=0.05, testDirection="over")
+
+#Run functional enrichment
+hgOver3 <- hyperGTest(params3)
+hgOver3
+
+# Results
+resHgOver3<- summary(hgOver3)
+dim(resHgOver3)
+head(resHgOver3)
+```
+
+```{r pdistGO, echo=FALSE, out.width="600px", fig.cap="Distribution of p-values of the GO enrichment analysis."}
+
+hist(pvalues(hgOver3), xlab="P-values", main="ND vs T1D", las=1, col= "lightgreen", border="black")
+
+```
+
+We can se in Figure \@ref(fig:pdistGO) that the P-value distribution is enriched towards low P-values, which often makes this type of analysis too optimistic. A challenge in Gene Ontology (GO) analysis arises from the interdependence of terms due to their hierarchical structure and overlapping gene sets. To address this, @alexa06 propose computing the significance of a GO term conditional on the significance of its children. This involves performing a bottom-up conditional test, where genes associated with a significant child term are removed from its parent terms. This approach prioritizes more specific and relevant terms in the analysis.
+
+```{r GO cond, message=FALSE}
+# ND vs T1D (tt3)
+conditional(params3) <- TRUE
+hgOverCond3 <- hyperGTest(params3)
+hgOverCond3
+
+#into a df
+resHgOverCond3 <- summary(hgOverCond3)
+dim(resHgOverCond3)
+head(resHgOverCond3)
+
+#Filter with a minimum number of count and size
+mask <- resHgOverCond3$Size >= 3 & resHgOverCond3$Size <= 300 & + resHgOverCond3$Count >= 3
+resHgOverCond3 <- resHgOverCond3[mask, ]
+dim(resHgOverCond3)
+ord <- order(resHgOverCond3$OddsRatio, decreasing=TRUE)
+resHgOverCond3 <- resHgOverCond3[ord, ]
+
+#Extratc genes of each GO term
+geneIDs <- geneIdsByCategory(hgOverCond3)[resHgOverCond3$GOBPID]
+geneSYMs <- sapply(geneIDs, function(id) mapIds(org.Hs.eg.db, keys = id, column = "SYMBOL", keytype = "ENTREZID"))
+geneSYMs <- sapply(geneSYMs, paste, collapse=", ")
+goresults <- cbind(resHgOverCond3, Genes=geneSYMs)
+rownames(goresults) <- 1:nrow(goresults)
+head(goresults)
+
+ktab <- kable(goresults, "html", caption="GO results.") %>% kable_styling(bootstrap_options = c("striped", "hover", "responsive"), fixed_thead = TRUE)
+fnameHTML_ND_D <- "ND_T1D_go.html"
+fpathHTML_ND_D <- file.path(path2pkg, "doc", fnameHTML_ND_D)
+save_kable(ktab, file = fpathHTML_ND_D, self_contained = TRUE)
+
+```
+
+
+```{r pdistGO2, echo=FALSE, out.width="600px", fig.cap="Distribution of p-values of the GO enrichment analysis after conditionaltest."}
+
+# Set up the layout for six plots in a 2x3 grid
+par(mfrow = c(1, 2), mar = c(5, 5, 2, 2))
+
+# Histogram of p-values before filtering for ND vs T1D
+hist(pvalues(hgOverCond3), xlab = "P-values", main = "Conditional test before filtering (ND vs T1D)", las = 1, col = "lightgreen", border = "black", cex.main=0.8)
+
+# Histogram of p-values after filtering for ND vs T1D
+pvals_ndt1d <- pvalues(hgOverCond3)
+hist(pvals_ndt1d[resHgOverCond3$GOBPID], xlab = "P-values", xlim = c(0, 1),
+     main = "Conditional test after filtering (ND vs T1D)", las = 1, col = "lightgreen", border = "black", cex.main=0.8)
+```
+
+The number of significant GO terms has decreased and the histogram of Figure \@ref(fig:pdistGO2) shows that it is now less biased to low pvalues after doing the conditional test.
+
+For a better representation of the topGO terms we visualize them using a Dotplot.
+
+```{r GOdotplot, echo=FALSE, message=FALSE, out.width="600px", fig.cap="Dotplot of the top 25 GO enriched terms in T1D vs ND comparison."}
+# ND vs T1D (tt3)
+# Sort the data frame based on P-value and select the top
+library(dplyr)
+top_terms3 <- resHgOverCond3 %>%
+  arrange(Pvalue) %>%
+  head(25)
+
+# Create the dot plot
+ggplot(top_terms3, aes(x = OddsRatio, y = reorder(Term, OddsRatio), size = Count, color = Pvalue)) +
+  geom_point(alpha = 0.7) +
+  scale_color_gradient(low = "darkblue", high = "red") +
+  labs(x = "Odds Ratio", y = "Term", size = "Count", color = "P-value") +
+  ggtitle("Top 25 GO Terms with Lowest P-values
+                        ND vs T1D") +
+  theme_minimal()
+
+```
+
+We can see in Figure \@ref(fig:GOdotplot) several significantly enriched biological processes. Antigen processing and presentation, both endogenous and exogenous, highlight the autoimmune nature of type 1 diabetes, leading to beta-cell destruction. Processes like gluconeogenesis, glucose homeostasis, and hexose metabolism underscore metabolic dysregulation, resulting in hyperglycemia. Protein-related processes, including folding in the ER, localization to membranes, and positive regulation of protein transport and secretion, emphasize the cellular stress and impaired insulin production characteristic of type 1. 
+
+## Gene Set Enrichment Analysis (GSEA)
+
+In addition to performing functional analysis with Gene Ontology (GO), we employed the Gene Set Enrichment Analysis (GSEA) approach to assess pathway enrichment for each gene set. GSEA calculates an enrichment score (ES) based on the position of genes within a ranked list of changes in gene expression. Significance then, is calculated by generating an empirical null distribution of ES values and either (1) permute phenotype labels; or (2) permute gene set memberships. In our case we will permute gene set memberships. Permuting gene set memberships is a valuable approach for evaluating differences between pairs of conditions in gene set enrichment analysis. This method allows us to identify gene sets whose functions or characteristics are inherently associated with differential expression patterns across conditions, providing insights into the underlying biological processes driving these differences. 
+
+GSEA is particularly adept at detecting subtle yet coordinated changes in gene expression, offering insights into the underlying molecular mechanisms implicated in the disease. This approach enables us to elucidate the pathways and biological processes disrupted in diabetes, even in instances where highly significant differentially expressed genes may be lacking in certain conditions.
+
+To conduct the GSEA analysis, we need a collection of gene sets. For this purpose, we will use the _GeneSetCollection_ called  **c2BroadSets** from the [GSVA](https://www.bioconductor.org/packages/release/bioc/html/GSVA.html), which includes curated gene sets from various sources such as online pathway databases and biomedical literature. Specifically, we will use the KEGG, REACTOME, and BIOCARTA pathways from this GeneSetCollection, which are well-regarded databases providing curated information about biological pathways and networks.
+
+```{r GSEAdata, message=FALSE}
+library(GSVAdata)
+
+# C2 Curated Gene Sets
+data(c2BroadSets)
+c2BroadSets <- c2BroadSets[c(grep("^KEGG", names(c2BroadSets)),
+               grep("^REACTOME", names(c2BroadSets)), grep("^BIOCARTA", names(c2BroadSets)))]
+
+gsc<-GeneSetCollection(c2BroadSets)
+```
+
+```{r GSEA Analysis, message=FALSE}
+library(fgsea)
+
+gsets <- geneIds(gsc)
+
+#AAb vs T1D
+stats1 <- tt1$t
+names(stats1) <- rownames(tt1)
+fgseares1 <- fgsea(gsets, stats1, minSize=5, maxSize=300)
+
+#AAb vs ND
+stats2 <- tt2$t
+names(stats2) <- rownames(tt2)
+fgseares2 <- fgsea(gsets, stats2, minSize=5, maxSize=300)
+
+#T1D vs ND
+stats3 <- tt3$t
+names(stats3) <- rownames(tt3)
+fgseares3 <- fgsea(gsets, stats3, minSize=5, maxSize=300)
+
+```
+
+After the  analysis, we filter the resuls based on a **FDR threshold of less than 1%**. 
+
+The enriched pathways with a FDR threshold of less than 1% between AAb and T1D samples are shown in Table \@ref(tab:GSEAfilter1) below:
+
+```{r GSEAfilter1,echo=FALSE, message=FALSE}
+#AAb vs T1D
+gsea1 <- fgseares1[fgseares1$padj < 0.01, ]
+
+gsea1$log2err <- NULL
+colnames(gsea1) <- c("Pathway", "PValue", "PadjValue", "ES", "NES","Size", "LeadingEdge")
+
+ktab1 <- kable(gsea1[order(gsea1$PadjValue), ], caption="Enriched Pathways between AAb and T1D samples", format = "html", booktabs = TRUE, row.names = FALSE) 
+kable_styling(ktab1, position="center")
+```
+
+Now we represent the enriched pathways between AAb and T1D in a dot plot (Figure \@ref(fig:GSEAdotplot1)).
+
+```{r GSEAdotplot1, echo=FALSE, message=FALSE, out.width="600px", fig.cap="Dotplot of the top 25 GSEA enriched pathways between AAb vs T1D."}
+# Select the top 25 pathways
+gsea1_top <- head(gsea1, 25)
+
+# Create the dotplot
+ggplot(gsea1_top, aes(x = NES, y = reorder(Pathway, NES), size = Size, color = PValue)) +
+  geom_point(alpha = 0.7) +
+  scale_color_gradient(low = "darkblue", high = "red") +
+  labs(x = "NES", y = "Pathway", size = "Size", color = "P-value") +
+  ggtitle("AAb vs T1D") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8)) 
+```
+
+The enriched pathways with a FDR threshold of less than 1% between AAb and ND samples are shown in Table \@ref(tab:GSEAfilter2) below:
+
+```{r GSEAfilter2,echo=FALSE,message=FALSE}
+#AAb vs ND
+gsea2 <- fgseares2[fgseares2$padj < 0.01, ]
+
+gsea2$log2err <- NULL
+colnames(gsea2) <- c("Pathway", "PValue", "PadjValue", "ES", "NES","Size", "LeadingEdge")
+
+ktab2 <- kable(gsea2[order(gsea2$PadjValue), ], caption="Enriched Pathways between AAb and ND samples", format = "html", booktabs = TRUE, row.names = FALSE)
+kable_styling(ktab2, position="center")
+```
+
+Now we represent the top 25 enriched pathways between AAb and ND in a dot plot (Figure \@ref(fig:GSEAdotplot2)).
+
+```{r GSEAdotplot2, echo=FALSE, message=FALSE, out.width="600px", fig.cap="Dotplot of the top 25 GSEA enriched pathways between AAb and ND."}
+# Select the top 25 pathways
+gsea2_top <- head(gsea2, 25)
+
+# Create the dotplot
+ggplot(gsea2_top, aes(x = NES, y = reorder(Pathway, NES), size = Size, color = PValue)) +
+  geom_point(alpha = 0.7) +
+  scale_color_gradient(low = "darkblue", high = "red") +
+  labs(x = "NES", y = "Pathway", size = "Size", color = "P-value") +
+  ggtitle("AAb vs ND") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8)) 
+```
+
+The enriched pathways with a FDR threshold of less than 1% between T1D and ND samples are shown in Table \@ref(tab:GSEAfilter3) below:
+
+```{r GSEAfilter3,echo=FALSE, message=FALSE}
+#T1D vs ND
+gsea3 <- fgseares3[fgseares3$padj < 0.01, ]
+
+gsea3$log2err <- NULL
+colnames(gsea3) <- c("Pathway", "PValue", "PadjValue", "ES", "NES","Size", "LeadingEdge")
+
+ktab3 <- kable(gsea3[order(gsea3$PadjValue), ], caption="Enriched Pathways between T1D and ND samples", format = "html", booktabs = TRUE, row.names = FALSE)
+kable_styling(ktab3, position="center")
+
+```
+Finally we represent the top 25 enriched pathways between T1D and ND in a dot plot (Figure \@ref(fig:GSEAdotplot3)).
+
+```{r GSEAdotplot3, echo=FALSE, message=FALSE, out.width="600px", fig.cap="Dotplot of the top 25 GSEA enriched pathways between T1D and ND."}
+# Select the top 25 pathways
+gsea3_top <- head(gsea3, 25)
+
+# Create the dotplot
+ggplot(gsea3_top, aes(x = NES, y = reorder(Pathway, NES), size = Size, color = PValue)) +
+  geom_point(alpha = 0.7) +
+  scale_color_gradient(low = "darkblue", high = "red") +
+  labs(x = "NES", y = "Pathway", size = "Size", color = "P-value") +
+  ggtitle("T1D vs ND") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8))  
+```
+
+# Discussion
+
+To address the main question of our project, which involved understanding potential differential expression patterns between the studied groups, a methodical and thorough analysis was carried out. In this context, this work revealed no differentially expressed genes between patients suffering from diabetes (T1D) and auto-antibody individuals (AAb), suggesting that the two conditions are similar. On the other hand, only two DE genes were found between AAb and control (ND), in comparison with the six total genes found in the reference study. In our analysis, one gene is upregulated (LINC01099) and one downregulated (CD74). Interestingly, LINC01099 is a non-coding RNA which was not detected in @campbellthompson21 work. However, previous studies have reported its presence and it was considered to be expressed mainly in β-pancreatic cells (@segerstolpe16). In the case of autoimmune diseases related genes, CD74 stands out. It is also known for being part of the class II major histocompatibility complex (MHC). Our analysis indicated that CD74 expression was significantly higher in both AAb and T1D donors compared to ND donors, which is also consistent with the findings in the reference paper. Furthermore, this gene was previously reported to have increased expression in β-cells coming from T1D patients. This study claims to be the first one detecting increased expression of this gene specifically in AAb donors, which is supported as well by our results.
+
+In the case of T1D and ND, more than 2000 genes were found to be differentially expressed, in comparison with the 89 DE genes shown in the paper. Between the top genes we found several autoimmune disease-related genes. As expected, genes implicated in endrocrine system development, regulation and insulin secretion were also significant, giving raise to an enrichment in pathways of the same characteristics. Other genes were found, such as MT1G, which translates into a metallothionein 1 (MT1) protein that binds a variety of metals. MT1G has been previously reported in β-cell biology as a negative regulator of glucose-stimulated insulin secretion (@bensellam21). 
+
+Furthermore, a relation between neurological-related pathways and type-1 diabetes is highlighted. In this context, some DE genes found in our analyses include NEURL3, LRRTM3 and NPTX2. Interestingly, the latter, NPTX2 (Neuronal Pentraxin 2 gene, down-regulated), becomes progressively decreased with age (@silva15). Decreased levels of this modulator are associated with synapse loss and therefore, cognitive decline. It is essential for synaptic plasticity and inhibitory-excitatory balance in the central nervous system (@vansteenoven20). In this context, NPTX2 levels are also reduced in diabetic β-cells, as supported by previous findings, which is also shown in our report. In the same tone, several studies have reported strong relationship between diabetes disease and Alzheimer's disease (which is, in fact, considered a comorbid condition with diabetes) (@alamro23), as well as Parkinson's disease. Indeed, two of the KEGG enriched pathways found significant in our dataset are related to these two neuropathologies (KEGG_ALZHEIMERS_DISEASE, KEGG_PARKINSONS_DISEASE). 
+
+However, we were not able to replicate all the enriched pathways related to neurological or synaptic processes such as Dopamine Receptor Signaling or α-Adrenergic Signaling highlighted in the article, which may be due to the fact that different approaches were chosen for the enrichment analysis. Nevertheless, neurological processes are undoubtedly affected in this disease. 
+
+Some of the differences seen when obtaining the results in comparison with the reference paper could be due to the fact that authors did not filter lowly expressed genes, and apparently did not use covariates as well. In this sense, our analysis involved examining how samples group using multidimensional scaling (MDS) and hierarchical clustering, annotated by disease state, sex, BMI, age, and cause of death. In the MDS analysis, a prominent clustering pattern with a main cluster and three outliers, including sample T1D_6109 (a 5-year-old) was observed. Moreover, no clear clustering based on the variables examined was identified.
+The distinct outlier suggests significant deviations in expression profiles, warranting further investigation into potential age-related expression patterns or technical artifacts.
+
+According to the Hierarchical Clustering Analysis, no distinct clustering pattern emerged when using sex, indicating no segregation based on gender. In the case of BMI, some clustering was observed, particularly with a concentration of underweight samples, but other BMI categories did not show clear clusters, suggesting additional contributing factors.
+
+Interestingly, a discernible age-based clustering pattern was found, indicating age might be a confounding variable influencing expression profiles. That is why we suggest careful consideration to avoid bias, though further validation is needed to confirm the potential effect age may have in this disease.
+
+
+# Conclusions
+
+-The analysis revealed no differentially expressed genes between diabetes (T1D) and auto-antibody (AAb) individuals, suggesting that these conditions share similar expression profiles.
+
+-The present findings claim the existence of diverse biological functions affected in diabetes disease. 
+
+-Over 2000 genes were differentially expressed between T1D and ND, significantly more than the 89 genes reported in the reference study. Many of these genes are related to autoimmune diseases and endocrine system functions.
+
+-The analysis highlighted the involvement of some neurological pathways in T1D. Enriched pathways included those related to Alzheimer's and Parkinson's diseases, underscoring the comorbidity between diabetes and these neurological conditions.
+
+-Differences in results compared to the reference study might stem from filtering lowly expressed genes and incorporating covariates. MDS and hierarchical clustering analyses showed no clear segregation by sex or BMI but revealed an age-based clustering pattern. Age might act as a confounding variable influencing expression profiles, necessitating careful consideration to avoid bias in future analyses.
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+
+# References
+
+
+
